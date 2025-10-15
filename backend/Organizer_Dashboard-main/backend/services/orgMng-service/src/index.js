@@ -3,7 +3,7 @@ const cors = require('cors');
 require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || process.env.BACKEND_ORG_MANAGEMENT_SERVICE_PORT || 5001;
+const PORT = process.env.PORT || 5001;
 
 
 // Middleware - fix typo
@@ -34,6 +34,9 @@ app.use((err, req, res, next) => {
         message: 'Something went wrong!'
     });
 });
+
+
+
 
 
 app.listen(PORT, () => {

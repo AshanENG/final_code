@@ -3,16 +3,25 @@ const cors = require('cors');
 require('dotenv').config({path:__dirname+ '/../.env'});
 
 const app = express();
-const PORT = process.env.PORT || process.env.BACKEND_AUTH_SERVICE_PORT || 5004;
+const PORT = process.env.PORT || 5004;
 
+// CORS configuration to allow requests from unified server
+// const corsOptions = {
+//     origin: process.env.CORS_ORIGIN || 'http://localhost:8080',
+//     credentials: true,
+//     optionsSuccessStatus: 200
+// };
 
 // Middleware - fix typo
 app.use(cors());
+// app.use(cors(corsOptions));
 app.use(express.json());
 
 // Routes
 const authRoutes = require('./routes/authRoutes');
-app.use('/', authRoutes);
+
+app.use('/auths', authRoutes);
+
 
 
 // Error handling middleware - add this after routes

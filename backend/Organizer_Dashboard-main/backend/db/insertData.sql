@@ -2,25 +2,26 @@
 -- INSERT SAMPLE DATA
 -- ==============================
 \c organizer_dashboard;
--- 1. Zone
+
 INSERT INTO Zone (zone_name) VALUES
-('A'),
-('B'),
-('C'),
-('D');
+('A'),      -- This would get zone_ID = 1
+('B'),      -- This would get zone_ID = 2  
+('C'),      -- This would get zone_ID = 3
+('D');      -- This would get zone_ID = 4
+-- 1. Zone
+
 
 -- 2. Building
 INSERT INTO Building (building_ID, zone_ID, building_name, description, exhibits) VALUES
-(101, 1, 'Tech Building A', 'Main hub for technology exhibits', ARRAY['Robotics', 'AI']),
-(102, 1, 'Tech Building B', 'Secondary hub for tech startups', ARRAY['IoT', 'Cloud']),
-(201, 2, 'Innovation Hub', 'Creative innovations from students', ARRAY['Green Energy', 'Smart Devices']),
-(301, 3, 'Research Block', 'Research papers and prototypes', ARRAY['Medical Research', 'NanoTech']);
+(101, 1, 'Tech Building A', 'Main hub for technology exhibits', ARRAY['robocar', 'robotics']),
+(102, 1, 'Tech Building B', 'Secondary hub for tech startups', ARRAY['cal', 'Electronics']);
+
 
 -- 3. Exhibits
 INSERT INTO Exhibits (exhibit_name, building_ID) VALUES
 ('Autonomous Drone', 101),
 ('AI Chatbot', 101),
-('IoT Smart Home', 102),
+('IoT Smart Home', 102),\
 ('Nano Medicine Prototype', 301);
 
 -- 4. Organizer
@@ -71,3 +72,40 @@ INSERT INTO Event_Tag (event_ID, tag_ID) VALUES
 (2, 2),
 (3, 3),
 (4, 4);
+
+-- 11. Exhibit_Tag_Map (exhibit name -> allowed tag) using only:
+-- ['AI','Robotics','Mechanics','Civil','Electronics','Computer Science','Chemical','Manufacturing']
+-- This resolves building_ID from Exhibits to keep consistency
+INSERT INTO Exhibit_Tag_Map (building_ID, exhibit_name, tag)
+SELECT e.building_ID, e.exhibit_name, v.tag
+FROM (
+	VALUES
+		('Autonomous Drone', 'Robotics'),
+		('Autonomous Drone', 'AI'),
+		('Autonomous Drone', 'Electronics'),
+		('AI Chatbot', 'AI'),
+		('AI Chatbot', 'Computer Science'),
+		('IoT Smart Home', 'Electronics'),
+		('IoT Smart Home', 'Computer Science'),
+		('Nano Medicine Prototype', 'Chemical'),
+		('Nano Medicine Prototype', 'Electronics')
+) AS v(exhibit_name, tag)
+JOIN Exhibits e ON e.exhibit_name = v.exhibit_name
+ON CONFLICT DO NOTHING;
+
+-- 12. Exhibit_Tag_Map from Building seed pairs
+-- Building 101: 'robocar' -> 'robotics'
+-- Building 102: 'cal' -> 'Electronics'
+INSERT INTO Exhibit_Tag_Map (building_ID, exhibit_name, tag)
+SELECT v.building_ID, v.exhibit_name, v.tag
+FROM (
+	VALUES
+		(101, 'robocar', 'robotics'),
+		(102, 'cal', 'Electronics')
+) AS v(building_ID, exhibit_name, tag)
+WHERE NOT EXISTS (
+	SELECT 1 FROM Exhibit_Tag_Map etm
+	WHERE etm.building_ID = v.building_ID
+		AND etm.exhibit_name = v.exhibit_name
+		AND etm.tag = v.tag
+);
