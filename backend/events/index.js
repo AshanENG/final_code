@@ -1,29 +1,31 @@
 const express = require("express");
+require("dotenv").config();
+const pool = require("./db");  // PostgreSQL connection pool
 // Start periodic event sync
 require("./fetchAndSyncEvents");
 const cookieParser = require("cookie-parser");
 const { v4: uuidv4 } = require("uuid");
-const supabase = require("./db");
 const cors = require("cors");
 
 // routes
 const eventRoutes = require("./routes/events.routes");
 const ratingsRoutes = require("./routes/ratings.routes");
 const eventListRoutes = require("./routes/eventlist.routes");
-
 const interestsRouter = require("./routes/interests.routes");
-
 const userinterestsRouter = require("./routes/userinterests.routes");
 
-
+// set the main port
 const app = express();
-const PORT = process.env.PORT || process.env.BACKEND_EVENTS_SERVICE_PORT || 3036;
+const PORT = process.env.PORT;
+console.log('PORT from env:', PORT);
 
-const allowedOrigin = process.env.FRONTEND_ORIGIN || "http://localhost:5173";
+// Browsers block requests between different origins (ports, domains) by default. This enables your frontend to communicate with your backend.
+const allowedOrigin = process.env.FRONTEND_ORIGIN;
+console.log('FRONTEND_ORIGIN from env:', allowedOrigin);
 app.use(
     cors({
-        origin: allowedOrigin,
-        credentials: true,
+        origin: allowedOrigin, //only take reguest from this origin
+        credentials: true, // allow session cookies from browser to pass through
     })
 );
 
@@ -47,15 +49,32 @@ app.use((req, res, next) => {
 // ------------------- TEST ROUTE -------------------
 app.get("/", async (req, res) => {
     try {
-        const { data, error } = await supabase
-            .from("events")
-            .select("*")
-            .limit(8);
-        if (error) throw error;
-        res.send({ message: "✅ Connected to Supabase!", sampleRows: data });
+        // Query your local Events table
+        const result = await pool.query(`
+            SELECT 
+                event_id,
+                event_name,
+                start_time,
+                end_time,
+                location,
+                description,
+                event_categories
+            FROM Events 
+            ORDER BY start_time DESC
+            LIMIT 8
+        `);
+        
+        res.send({ 
+            message: "✅ Connected to PostgreSQL Database: organizer_dashboard!", 
+            sampleRows: result.rows,
+            totalEvents: result.rows.length
+        });
     } catch (err) {
-        console.error("❌ Supabase error:", err.message);
-        res.status(500).send("Connection failed!");
+        console.error("❌ PostgreSQL error:", err.message);
+        res.status(500).send({
+            error: "Connection failed!",
+            details: err.message
+        });
     }
 });
 
@@ -64,16 +83,12 @@ app.get("/", async (req, res) => {
 app.use("/api", interestsRouter); // includes /events/recommended, /events/discover, etc.
 app.use("/api/events", eventListRoutes); // /api/events list
 app.use("/api", ratingsRoutes);
-
 app.use("/api", eventRoutes); // includes /events/:id and related
-
-
 app.use("/api/interests", userinterestsRouter);
 
 
 
 // ------------------- START SERVER -------------------
-
 app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
 });

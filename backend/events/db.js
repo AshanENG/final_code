@@ -1,9 +1,21 @@
-const { createClient } = require('@supabase/supabase-js');
-require('dotenv').config();  // loads .env
+const { Pool } = require('pg');  //pg class
 
-const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_KEY  // use service key for server-side operations
-);
+// Create a connection pool for your local PostgreSQL database
+const pool = new Pool({
+    user: process.env.DB_USER,
+    host: process.env.DB_HOST,
+    database: process.env.DB_NAME,
+    password: process.env.DB_PASSWORD,
+    port: process.env.DB_PORT
+});
 
-module.exports = supabase;
+// Test connection
+pool.on('connect', () => {
+    console.log('Connected to PostgreSQL database: organizer_dashboard');
+});
+
+pool.on('error', (err) => {
+    console.error('PostgreSQL connection error:', err);
+});
+
+module.exports = pool;

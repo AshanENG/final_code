@@ -1,7 +1,7 @@
 const express = require("express");
 const cookieParser = require("cookie-parser");
 const { randomUUID } = require("crypto");
-const supabase = require("../db");
+const pool = require("../db");       // use local databbase
 
 const router = express.Router();
 const COOKIE_NAME = "userId";
@@ -24,38 +24,54 @@ router.use((req, res, next) => {
 
 // GET all categories
 router.get("/categories", async (_req, res) => {
-  const { data, error } = await supabase
-    .from("categories")
-    .select("category_id, category_name")
-    .order("category_name", { ascending: true });
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data || []);
+  try {
+    const result = await pool.query(`
+      SELECT category_id, category_name 
+      FROM categories 
+      ORDER BY category_name ASC
+    `);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching categories:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
+
+
 
 // GET my interests (with names)
 router.get("/interests/me", async (req, res) => {
   try {
-    const { data: rows, error } = await supabase
-      .from("interested_category")
-      .select("category_id")
-      .eq("user_id", req.userId);
-    if (error) throw error;
+    // Get user's category IDs
+    const userInterestsResult = await pool.query(`
+      SELECT category_id 
+      FROM interested_category 
+      WHERE user_id = $1
+    `, [req.userId]);
 
-    const ids = (rows || []).map(r => r.category_id);
-    if (!ids.length) return res.json({ user_id: req.userId, categories: [] });
+    const categoryIds = userInterestsResult.rows.map(r => r.category_id);
+    
+    if (!categoryIds.length) {
+      return res.json({ user_id: req.userId, categories: [] });
+    }
 
-    const { data: cats, error: cerr } = await supabase
-      .from("categories")
-      .select("category_id, category_name")
-      .in("category_id", ids);
-    if (cerr) throw cerr;
+    // Get category names for those IDs
+    const categoriesResult = await pool.query(`
+      SELECT category_id, category_name 
+      FROM categories 
+      WHERE category_id = ANY($1)
+    `, [categoryIds]);
 
-    res.json({ user_id: req.userId, categories: cats });
-  } catch (e) {
-    console.error(e);
+    res.json({ 
+      user_id: req.userId, 
+      categories: categoriesResult.rows 
+    });
+  } catch (error) {
+    console.error('Error fetching user interests:', error);
     res.status(500).json({ error: "server error" });
   }
 });
+
 
 // POST replace my interests
 router.post("/interests/me", async (req, res) => {
@@ -64,28 +80,38 @@ router.post("/interests/me", async (req, res) => {
       ? [...new Set(req.body.categories.map(String))]
       : [];
 
-    // clear current
-    const { error: delErr } = await supabase
-      .from("interested_category")
-      .delete()
-      .eq("user_id", req.userId);
-    if (delErr) throw delErr;
+    // Start transaction
+    await pool.query('BEGIN');
 
-    if (!categories.length)
+    // Clear current interests
+    await pool.query(`
+      DELETE FROM interested_category 
+      WHERE user_id = $1
+    `, [req.userId]);
+
+    if (!categories.length) {
+      await pool.query('COMMIT');
       return res.json({ user_id: req.userId, saved: [] });
+    }
 
-    const rows = categories.map(id => ({ user_id: req.userId, category_id: id }));
-    const { error: insErr } = await supabase
-      .from("interested_category")
-      .insert(rows);
-    if (insErr) throw insErr;
+    // Insert new interests
+    const insertQuery = `
+      INSERT INTO interested_category (user_id, category_id) 
+      VALUES ${categories.map((_, i) => `($1, $${i + 2})`).join(', ')}
+    `;
+    
+    await pool.query(insertQuery, [req.userId, ...categories]);
+    await pool.query('COMMIT');
 
     res.json({ user_id: req.userId, saved: categories });
-  } catch (e) {
-    console.error(e);
+  } catch (error) {
+    await pool.query('ROLLBACK');
+    console.error('Error updating user interests:', error);
     res.status(500).json({ error: "server error" });
   }
 });
+
+
 
 // GET events matching selected categories, includes category names
 router.get("/events/discover", async (req, res) => {
@@ -94,123 +120,128 @@ router.get("/events/discover", async (req, res) => {
       .split(",")
       .map(s => s.trim())
       .filter(Boolean);
-    const filterSet = new Set(filterIds.map(String));
-    if (!filterIds.length) return res.json({ items: [], total: 0 });
+    
+    if (!filterIds.length) {
+      return res.json({ items: [], total: 0 });
+    }
 
-    // event-category mapping
-    const { data: mapRows, error: mapErr } = await supabase
-      .from("event_categories")
-      .select("event_id, category_id");
-    if (mapErr) throw mapErr;
+    // Get events that match the categories
+    const eventsResult = await pool.query(`
+      SELECT DISTINCT e.event_id, e.event_name, e.start_time, e.end_time, 
+             e.description, e.location
+      FROM Events e
+      JOIN event_categories ec ON e.event_id = ec.event_id
+      WHERE ec.category_id = ANY($1)
+      ORDER BY e.start_time ASC
+    `, [filterIds]);
 
-    const matchingEventIds = [...new Set(
-      (mapRows || [])
-        .filter(m => filterSet.has(String(m.category_id)))
-        .map(m => m.event_id)
-    )];
-    if (!matchingEventIds.length) return res.json({ items: [], total: 0 });
+    const events = eventsResult.rows;
+    
+    if (!events.length) {
+      return res.json({ items: [], total: 0 });
+    }
 
-    // events
-    const { data: events, error: evErr } = await supabase
-      .from("events")
-      .select("event_id, event_title, start_time, end_time, description, location")
-      .in("event_id", matchingEventIds)
-      .order("start_time", { ascending: true });
-    if (evErr) throw evErr;
+    // Get event IDs for category lookup
+    const eventIds = events.map(e => e.event_id);
 
-    // categories for those events
-    const neededCatIds = [...new Set(
-      (mapRows || []).filter(m => matchingEventIds.includes(m.event_id))
-                     .map(m => m.category_id)
-    )];
-    const { data: cats, error: cErr } = await supabase
-      .from("categories")
-      .select("category_id, category_name")
-      .in("category_id", neededCatIds);
-    if (cErr) throw cErr;
-    const nameById = new Map(cats.map(c => [c.category_id, c.category_name]));
+    // Get all categories for these events
+    const categoriesResult = await pool.query(`
+      SELECT ec.event_id, ec.category_id, c.category_name
+      FROM event_categories ec
+      JOIN categories c ON ec.category_id = c.category_id
+      WHERE ec.event_id = ANY($1)
+    `, [eventIds]);
 
-    const items = events.map(ev => {
-      const evCatIds = [...new Set(
-        (mapRows || []).filter(m => m.event_id === ev.event_id)
-                       .map(m => m.category_id)
-      )];
-      return {
-        ...ev,
-        categories: evCatIds.map(id => ({
-          category_id: id,
-          category_name: nameById.get(id) || id,
-        })),
-      };
+    // Group categories by event_id
+    const categoriesByEvent = {};
+    categoriesResult.rows.forEach(row => {
+      if (!categoriesByEvent[row.event_id]) {
+        categoriesByEvent[row.event_id] = [];
+      }
+      categoriesByEvent[row.event_id].push({
+        category_id: row.category_id,
+        category_name: row.category_name
+      });
     });
 
+    // Attach categories to events
+    const items = events.map(event => ({
+      ...event,
+      categories: categoriesByEvent[event.event_id] || []
+    }));
+
     res.json({ items, total: items.length });
-  } catch (e) {
-    console.error(e);
+  } catch (error) {
+    console.error('Error discovering events:', error);
     res.status(500).json({ error: "server error" });
   }
 });
 
+
 // GET /api/events/recommended -> based on my saved interests
 router.get("/events/recommended", async (req, res) => {
   try {
-    // 1) load my category ids
-    const { data: mine, error: mErr } = await supabase
-      .from("interested_category")
-      .select("category_id")
-      .eq("user_id", req.userId);
-    if (mErr) throw mErr;
+    // Get user's saved category IDs
+    const userInterestsResult = await pool.query(`
+      SELECT category_id 
+      FROM interested_category 
+      WHERE user_id = $1
+    `, [req.userId]);
 
-    const ids = (mine || []).map(r => r.category_id);
-    if (!ids.length) return res.json({ items: [], total: 0 });
+    const categoryIds = userInterestsResult.rows.map(r => r.category_id);
+    
+    if (!categoryIds.length) {
+      return res.json({ items: [], total: 0 });
+    }
 
-    // 2) event-category mapping
-    const { data: mapRows, error: mapErr } = await supabase
-      .from("event_categories")
-      .select("event_id, category_id");
-    if (mapErr) throw mapErr;
+    // Get events that match user's interests
+    const eventsResult = await pool.query(`
+      SELECT DISTINCT e.event_id, e.event_name, e.start_time, e.end_time, 
+             e.description, e.location
+      FROM Events e
+      JOIN event_categories ec ON e.event_id = ec.event_id
+      WHERE ec.category_id = ANY($1)
+      ORDER BY e.start_time ASC
+    `, [categoryIds]);
 
-    const matchEventIds = [...new Set(
-      (mapRows || []).filter(m => ids.includes(m.category_id)).map(m => m.event_id)
-    )];
-    if (!matchEventIds.length) return res.json({ items: [], total: 0 });
+    const events = eventsResult.rows;
+    
+    if (!events.length) {
+      return res.json({ items: [], total: 0 });
+    }
 
-    // 3) events
-    const { data: events, error: evErr } = await supabase
-      .from("events")
-      .select("event_id, event_title, start_time, end_time, description, location")
-      .in("event_id", matchEventIds)
-      .order("start_time", { ascending: true });
-    if (evErr) throw evErr;
+    // Get event IDs for category lookup
+    const eventIds = events.map(e => e.event_id);
 
-    // 4) attach category names
-    const neededCatIds = [...new Set(
-      (mapRows || []).filter(m => matchEventIds.includes(m.event_id)).map(m => m.category_id)
-    )];
-    const { data: cats, error: cErr } = await supabase
-      .from("categories")
-      .select("category_id, category_name")
-      .in("category_id", neededCatIds);
-    if (cErr) throw cErr;
+    // Get all categories for these events
+    const categoriesResult = await pool.query(`
+      SELECT ec.event_id, ec.category_id, c.category_name
+      FROM event_categories ec
+      JOIN categories c ON ec.category_id = c.category_id
+      WHERE ec.event_id = ANY($1)
+    `, [eventIds]);
 
-    const nameById = new Map(cats.map(c => [c.category_id, c.category_name]));
-
-    const items = events.map(ev => {
-      const evCatIds = [...new Set(
-        (mapRows || []).filter(m => m.event_id === ev.event_id).map(m => m.category_id)
-      )];
-      return {
-        ...ev,
-        categories: evCatIds.map(id => ({
-          category_id: id,
-          category_name: nameById.get(id) || id,
-        })),
-      };
+    // Group categories by event_id
+    const categoriesByEvent = {};
+    categoriesResult.rows.forEach(row => {
+      if (!categoriesByEvent[row.event_id]) {
+        categoriesByEvent[row.event_id] = [];
+      }
+      categoriesByEvent[row.event_id].push({
+        category_id: row.category_id,
+        category_name: row.category_name
+      });
     });
 
+    // Attach categories to events
+    const items = events.map(event => ({
+      ...event,
+      categories: categoriesByEvent[event.event_id] || []
+    }));
+
     res.json({ items, total: items.length });
-  } catch (e) {
-    console.error("GET /events/recommended", e);
+  } catch (error) {
+    console.error('Error getting recommended events:', error);
     res.status(500).json({ error: "server error" });
   }
 });
