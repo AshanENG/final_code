@@ -17,7 +17,7 @@ app.use(express.json());
 
 // Register each feature router
 app.use('/heatmap', require('./routes/heatmap'));       // Heatmap data from CCTV
-app.use('/api', require('./routes/sample_buildings'));  // Demo building data
+// app.use('/api', require('./routes/sample_buildings'));  // Demo building data
 app.get('/', (req, res) => res.json({ msg: "Hello from backend!" }));            // Home route
 // ===============================
 // SERVER STARTUP
