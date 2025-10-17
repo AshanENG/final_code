@@ -118,56 +118,43 @@ router.get("/events/discover", async (req, res) => {
   try {
     const filterIds = String(req.query.categories || "")
       .split(",")
-      .map(s => s.trim())
-      .filter(Boolean);
+      .map(s => parseInt(s.trim()))
+      .filter(id => !isNaN(id));
     
     if (!filterIds.length) {
       return res.json({ items: [], total: 0 });
     }
 
-    // Get events that match the categories
-    const eventsResult = await pool.query(`
-      SELECT DISTINCT e.event_id, e.event_name, e.start_time, e.end_time, 
-             e.description, e.location
-      FROM Events e
-      JOIN event_categories ec ON e.event_id = ec.event_id
-      WHERE ec.category_id = ANY($1)
-      ORDER BY e.start_time ASC
+    // Get category names for the filter IDs
+    const categoriesResult = await pool.query(`
+      SELECT category_id, category_name
+      FROM Categories
+      WHERE category_id = ANY($1)
     `, [filterIds]);
 
-    const events = eventsResult.rows;
-    
-    if (!events.length) {
-      return res.json({ items: [], total: 0 });
-    }
-
-    // Get event IDs for category lookup
-    const eventIds = events.map(e => e.event_id);
-
-    // Get all categories for these events
-    const categoriesResult = await pool.query(`
-      SELECT ec.event_id, ec.category_id, c.category_name
-      FROM event_categories ec
-      JOIN categories c ON ec.category_id = c.category_id
-      WHERE ec.event_id = ANY($1)
-    `, [eventIds]);
-
-    // Group categories by event_id
-    const categoriesByEvent = {};
+    const categoryMap = {};
     categoriesResult.rows.forEach(row => {
-      if (!categoriesByEvent[row.event_id]) {
-        categoriesByEvent[row.event_id] = [];
-      }
-      categoriesByEvent[row.event_id].push({
-        category_id: row.category_id,
-        category_name: row.category_name
-      });
+      categoryMap[row.category_id] = row.category_name;
     });
 
-    // Attach categories to events
-    const items = events.map(event => ({
-      ...event,
-      categories: categoriesByEvent[event.event_id] || []
+    const categoryNames = Object.values(categoryMap);
+
+    // Get events that have any of the specified categories in their event_categories array
+    const eventsResult = await pool.query(`
+      SELECT DISTINCT e.event_id, e.event_name, e.start_time, e.end_time, 
+             e.description, e.location, e.event_categories
+      FROM Events e
+      WHERE e.event_categories && $1
+      ORDER BY e.start_time ASC
+    `, [categoryNames]);
+
+    // const items = eventsResult.rows.map(event => ({
+    //   ...event,
+    //   categories: event.event_categories || []
+    // }));
+
+    const items = eventsResult.rows.map(event => ({
+      ...event || []
     }));
 
     res.json({ items, total: items.length });
@@ -194,50 +181,38 @@ router.get("/events/recommended", async (req, res) => {
       return res.json({ items: [], total: 0 });
     }
 
-    // Get events that match user's interests
-    const eventsResult = await pool.query(`
-      SELECT DISTINCT e.event_id, e.event_name, e.start_time, e.end_time, 
-             e.description, e.location
-      FROM Events e
-      JOIN event_categories ec ON e.event_id = ec.event_id
-      WHERE ec.category_id = ANY($1)
-      ORDER BY e.start_time ASC
+    // Get category names for the user's interested category IDs
+    const categoriesResult = await pool.query(`
+      SELECT category_id, category_name
+      FROM Categories
+      WHERE category_id = ANY($1)
     `, [categoryIds]);
 
-    const events = eventsResult.rows;
-    
-    if (!events.length) {
-      return res.json({ items: [], total: 0 });
-    }
-
-    // Get event IDs for category lookup
-    const eventIds = events.map(e => e.event_id);
-
-    // Get all categories for these events
-    const categoriesResult = await pool.query(`
-      SELECT ec.event_id, ec.category_id, c.category_name
-      FROM event_categories ec
-      JOIN categories c ON ec.category_id = c.category_id
-      WHERE ec.event_id = ANY($1)
-    `, [eventIds]);
-
-    // Group categories by event_id
-    const categoriesByEvent = {};
+    const categoryMap = {};
     categoriesResult.rows.forEach(row => {
-      if (!categoriesByEvent[row.event_id]) {
-        categoriesByEvent[row.event_id] = [];
-      }
-      categoriesByEvent[row.event_id].push({
-        category_id: row.category_id,
-        category_name: row.category_name
-      });
+      categoryMap[row.category_id] = row.category_name;
     });
 
-    // Attach categories to events
-    const items = events.map(event => ({
-      ...event,
-      categories: categoriesByEvent[event.event_id] || []
+    const categoryNames = Object.values(categoryMap);
+
+    // Get events that have any of the user's interested categories in their event_categories array
+    const eventsResult = await pool.query(`
+      SELECT DISTINCT e.event_id, e.event_name, e.start_time, e.end_time, 
+             e.description, e.location, e.event_categories
+      FROM Events e
+      WHERE e.event_categories && $1
+      ORDER BY e.start_time ASC
+    `, [categoryNames]);
+
+    // const items = eventsResult.rows.map(event => ({
+    //   ...event,
+    //   categories: event.event_categories || []
+    // }));
+
+    const items = eventsResult.rows.map(event => ({
+      ...event || []
     }));
+
 
     res.json({ items, total: items.length });
   } catch (error) {

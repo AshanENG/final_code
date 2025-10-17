@@ -2,7 +2,7 @@ const express = require("express");
 require("dotenv").config();
 const pool = require("./db");  // PostgreSQL connection pool
 // Start periodic event sync
-require("./fetchAndSyncEvents");
+// require("./fetchAndSyncEvents");
 const cookieParser = require("cookie-parser");
 const { v4: uuidv4 } = require("uuid");
 const cors = require("cors");
@@ -65,7 +65,7 @@ app.get("/", async (req, res) => {
         `);
         
         res.send({ 
-            message: "✅ Connected to PostgreSQL Database: organizer_dashboard!", 
+            message: "✅ Connected to PostgreSQL Database: engx", 
             sampleRows: result.rows,
             totalEvents: result.rows.length
         });
@@ -84,7 +84,7 @@ app.use("/api", interestsRouter); // includes /events/recommended, /events/disco
 app.use("/api/events", eventListRoutes); // /api/events list
 app.use("/api", ratingsRoutes);
 app.use("/api", eventRoutes); // includes /events/:id and related
-app.use("/api/interests", userinterestsRouter);
+// app.use("/api/interests", userinterestsRouter);
 
 
 

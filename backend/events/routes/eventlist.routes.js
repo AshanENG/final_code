@@ -1,37 +1,39 @@
-// backend/routes/events.routes.js
 const express = require('express');
-const supabase = require('../db');
+const pool = require('../db'); // Changed from supabase to pool
 
 const router = express.Router();
 
 // GET /api/events -> list all events with their categories
 router.get('/', async (req, res) => {
     try {
-        // Join events, event_categories, and categories to get category name for each event
-        const { data, error } = await supabase
-            .from('events')
-            .select(`event_id, event_title, start_time, end_time, location, event_categories(category_id, category:categories(category_id, category_name))`)
-            .order('start_time', { ascending: true });
+        // Get all events with their categories from the event_categories array
+        const result = await pool.query(`
+            SELECT 
+                e.event_id,
+                e.event_name AS event_title,
+                e.start_time,
+                e.end_time,
+                e.location,
+                e.description,
+                e.event_categories
+            FROM Events e
+            ORDER BY e.start_time ASC
+        `);
 
-        if (error) throw error;
-
-        // Map all categories for each event into an array
-        const eventsWithCategories = (data || []).map(event => {
-            let categories = [];
-            if (event.event_categories && event.event_categories.length > 0) {
-                categories = event.event_categories
-                    .filter(ec => ec && ec.category)
-                    .map(ec => ({
-                        category_id: ec.category.category_id,
-                        category_name: ec.category.category_name,
-                    }));
-            }
-            return { ...event, categories };
-        });
+        // Map the results to include categories in the expected format
+        const eventsWithCategories = result.rows.map(event => ({
+            event_id: event.event_id,
+            event_title: event.event_title,
+            start_time: event.start_time,
+            end_time: event.end_time,
+            location: event.location,
+            description: event.description,
+            categories: event.event_categories || [] // Use the array directly
+        }));
 
         res.json(eventsWithCategories);
     } catch (err) {
-        console.error('Supabase fetch error:', err.message);
+        console.error('PostgreSQL fetch error:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
